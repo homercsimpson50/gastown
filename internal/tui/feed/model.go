@@ -207,9 +207,9 @@ func (m *Model) Init() tea.Cmd {
 	if m.viewMode == ViewProblems {
 		cmds = append(cmds, m.fetchProblems())
 	}
-	// If starting in agents view, listen for agent events
+	// If starting in agents view, listen for agent events and start tick
 	if m.viewMode == ViewAgents {
-		cmds = append(cmds, m.listenForAgentEvents())
+		cmds = append(cmds, m.listenForAgentEvents(), tick())
 	}
 	return tea.Batch(cmds...)
 }
@@ -986,6 +986,13 @@ func (m *Model) addAgentEvent(e Event) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Health signal from AgentsSource — VLogs is reachable
+	if e.Type == "vlogs_healthy" {
+		m.agentsHealthy = true
+		m.updateViewContentLocked()
+		return
+	}
+
 	// Deduplicate: skip events we've already seen (by timestamp)
 	if !m.lastSeenAgentTime.IsZero() && !e.Time.After(m.lastSeenAgentTime) {
 		return
@@ -1065,33 +1072,17 @@ func (m *Model) triggerSummaryLocked() {
 	m.summaryProvider.Summarize(recent)
 }
 
-// isIdleEvent returns true for heartbeat/patrol/monitoring events that
-// shouldn't trigger AI re-summarization.
+// isIdleEvent returns true for maintenance/infrastructure events that
+// shouldn't trigger AI re-summarization. Only mayor and polecat events
+// are considered "real work" worth summarizing.
 func isIdleEvent(e Event) bool {
-	msg := strings.ToLower(e.Message)
-	// Refinery patrol cycles
-	if e.Role == "refinery" {
-		if strings.Contains(msg, "patrol") || strings.Contains(msg, "queue empty") ||
-			strings.Contains(msg, "empty cycle") || strings.Contains(msg, "session is health") ||
-			strings.Contains(msg, "gt mq list") || strings.Contains(msg, "git fetch") ||
-			strings.Contains(msg, "gt handoff") || strings.Contains(msg, "gt prime") ||
-			strings.Contains(msg, "gt mol step") {
-			return true
-		}
+	switch e.Role {
+	case "refinery", "witness", "deacon":
+		return true
 	}
-	// Witness patrol
-	if e.Role == "witness" {
-		if strings.Contains(msg, "patrol") || strings.Contains(msg, "health") ||
-			strings.Contains(msg, "gt prime") {
-			return true
-		}
-	}
-	// Deacon/dog maintenance
-	if e.Role == "deacon" || strings.Contains(e.Actor, "dog") {
-		if strings.Contains(msg, "reaper") || strings.Contains(msg, "gt dog") ||
-			strings.Contains(msg, "triage") {
-			return true
-		}
+	// Boot/dog agents are infrastructure
+	if strings.Contains(e.Actor, "boot") || strings.Contains(e.Actor, "dog") {
+		return true
 	}
 	return false
 }

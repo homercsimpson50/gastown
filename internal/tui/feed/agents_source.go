@@ -16,6 +16,7 @@ type AgentsSource struct {
 	events  chan Event
 	cancel  context.CancelFunc
 	session string // optional session filter
+	healthy bool   // true once VLogs responds successfully
 }
 
 // NewAgentsSource creates a source that polls VictoriaLogs for agent events.
@@ -63,6 +64,15 @@ func (s *AgentsSource) fetchAndEmit(ctx context.Context, since time.Duration, li
 		return // silently skip on error; VictoriaLogs may be unavailable
 	}
 
+	// VLogs responded — send a health signal so the TUI knows we're connected
+	if !s.healthy {
+		s.healthy = true
+		select {
+		case s.events <- Event{Type: "vlogs_healthy"}:
+		default:
+		}
+	}
+
 	// VictoriaLogs returns newest-first; sort oldest-first so the dedup
 	// logic in addAgentEvent (which tracks lastSeenAgentTime) works correctly.
 	sort.Slice(entries, func(i, j int) bool {
@@ -72,6 +82,11 @@ func (s *AgentsSource) fetchAndEmit(ctx context.Context, since time.Duration, li
 	for _, entry := range entries {
 		event := agentEntryToEvent(entry)
 		if event == nil {
+			continue
+		}
+		// Only show mayor and polecat events — refinery/witness/deacon/boot
+		// are infrastructure noise (use regular gt feed for those).
+		if isIdleEvent(*event) {
 			continue
 		}
 		select {

@@ -249,8 +249,38 @@ type ccEntry struct {
 // ccMessage is the message field of a ccEntry.
 type ccMessage struct {
 	Role    string      `json:"role"`
-	Content []ccContent `json:"content"`
+	Content []ccContent `json:"-"` // custom unmarshal: string or []ccContent
 	Usage   *ccUsage    `json:"usage,omitempty"`
+}
+
+// UnmarshalJSON handles Claude Code's two content formats:
+//   - User turns: content is a plain string (the typed prompt)
+//   - Assistant turns: content is []ccContent (text/tool_use/thinking blocks)
+func (m *ccMessage) UnmarshalJSON(data []byte) error {
+	// Use an alias to avoid infinite recursion
+	type alias struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+		Usage   *ccUsage        `json:"usage,omitempty"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	m.Role = a.Role
+	m.Usage = a.Usage
+
+	// Try as string first (user input)
+	var s string
+	if err := json.Unmarshal(a.Content, &s); err == nil {
+		if s != "" {
+			m.Content = []ccContent{{Type: "text", Text: s}}
+		}
+		return nil
+	}
+
+	// Try as array (assistant content blocks)
+	return json.Unmarshal(a.Content, &m.Content)
 }
 
 // ccUsage holds Claude API token usage counts for an assistant turn.

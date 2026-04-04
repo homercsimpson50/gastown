@@ -93,10 +93,11 @@ func SummarizeToolResult(content string) string {
 
 // SummarizeText produces a concise 1-line description of assistant text output.
 func SummarizeText(content string) string {
+	// Strip leading whitespace/newlines then take first non-empty line
+	content = strings.TrimLeft(content, "\n\r\t ")
 	if len(content) == 0 {
 		return ""
 	}
-	// First line of text, truncated
 	line := strings.SplitN(content, "\n", 2)[0]
 	return truncateMsg(line, 80)
 }
