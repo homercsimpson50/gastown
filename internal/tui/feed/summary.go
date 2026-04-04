@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -186,9 +187,9 @@ func (sp *SummaryProvider) generate(events []Event) (string, time.Duration, erro
 		lines = append(lines, line)
 	}
 
-	prompt := fmt.Sprintf(`You are an AI agent activity summarizer. Given these recent agent tool-call events from a software development system, write a 2-3 sentence summary of what is happening right now. Be concise and specific. Focus on what work is being done, by whom, and the current status. Do not repeat the events — synthesize them.
+	prompt := fmt.Sprintf(`Summarize these software agent events in 1-2 SHORT sentences. Max 30 words. Say WHO is doing WHAT. No filler.
 
-Events (most recent first):
+Events:
 %s
 
 Summary:`, strings.Join(lines, "\n"))

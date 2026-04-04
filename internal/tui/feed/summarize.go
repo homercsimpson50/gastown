@@ -15,18 +15,60 @@ type toolCall struct {
 }
 
 // SummarizeToolUse produces a concise 1-line description of a tool_use event.
-// Falls back to "Used <tool>" if the content can't be parsed.
+// Handles two formats:
+//  1. Wrapped: {"type":"tool_use","name":"Bash","input":{"command":"..."}}
+//  2. Raw content: {"command":"gt done","timeout":60000} (tool name inferred from fields)
 func SummarizeToolUse(content string) string {
+	// Try wrapped format first
 	var tc toolCall
-	if err := json.Unmarshal([]byte(content), &tc); err != nil {
-		// Try extracting tool name from partial content
-		if strings.Contains(content, "tool_use") {
-			return "Used tool"
-		}
-		return truncateMsg(content, 60)
+	if err := json.Unmarshal([]byte(content), &tc); err == nil && tc.Name != "" {
+		return summarizeTool(tc.Name, tc.Input)
 	}
 
-	return summarizeTool(tc.Name, tc.Input)
+	// Try raw input format — infer tool from fields present
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &raw); err == nil {
+		return summarizeRawInput(raw)
+	}
+
+	// Plain text content — just truncate
+	return truncateMsg(content, 80)
+}
+
+// summarizeRawInput infers the tool type from the fields in the JSON content
+// and generates a human-readable summary.
+func summarizeRawInput(raw map[string]interface{}) string {
+	// Bash: has "command" field
+	if _, ok := raw["command"].(string); ok {
+		return summarizeBash(raw)
+	}
+	// Read: has "file_path" and no "old_string"
+	if _, ok := raw["file_path"]; ok {
+		if _, hasOld := raw["old_string"]; hasOld {
+			return summarizeEdit(raw)
+		}
+		if _, hasContent := raw["content"]; hasContent {
+			return summarizeWrite(raw)
+		}
+		return summarizeRead(raw)
+	}
+	// Grep: has "pattern"
+	if _, ok := raw["pattern"]; ok {
+		return summarizeGrep(raw)
+	}
+	// Glob: has "pattern" but in glob context
+	if _, ok := raw["glob"]; ok {
+		return summarizeGlob(raw)
+	}
+	// Agent: has "description" or "prompt"
+	if _, ok := raw["description"]; ok {
+		if _, hasPrompt := raw["prompt"]; hasPrompt {
+			return summarizeAgent(raw)
+		}
+	}
+
+	// Unknown — show truncated JSON
+	return truncateMsg(fmt.Sprintf("%v", raw), 60)
 }
 
 // SummarizeToolResult produces a concise 1-line description of a tool_result event.

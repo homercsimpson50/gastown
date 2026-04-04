@@ -3,6 +3,7 @@ package feed
 import (
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	PanelFeed
 	PanelProblems // Problems panel in problems view
 	PanelAgents   // Agents panel in agents view
+	PanelSummary  // Summary panel in agents split view
 )
 
 // ViewMode represents which view is active
@@ -122,6 +124,7 @@ type Model struct {
 
 	// Summary panel (local LLM via Ollama)
 	summaryProvider    *SummaryProvider
+	summaryViewport    viewport.Model
 	showSummary        bool              // toggle split-screen summary
 	lastSummaryRefresh time.Time         // when we last triggered a summary
 
@@ -163,6 +166,7 @@ func NewModel(bd *beads.Beads) *Model {
 		viewMode:         ViewActivity,
 		stuckDetector:    NewStuckDetector(bd),
 		summaryProvider:  NewSummaryProvider(),
+		summaryViewport:  viewport.New(0, 0),
 	}
 }
 
@@ -437,6 +441,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.problemsViewport, cmd = m.problemsViewport.Update(msg)
 	case PanelAgents:
 		m.agentsViewport, cmd = m.agentsViewport.Update(msg)
+	case PanelSummary:
+		m.summaryViewport, cmd = m.summaryViewport.Update(msg)
 	}
 	m.mu.Unlock()
 	cmds = append(cmds, cmd)
@@ -548,6 +554,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.problemsViewport, cmd = m.problemsViewport.Update(msg)
 	case PanelAgents:
 		m.agentsViewport, cmd = m.agentsViewport.Update(msg)
+	case PanelSummary:
+		m.summaryViewport, cmd = m.summaryViewport.Update(msg)
 	}
 	m.mu.Unlock()
 	return m, cmd
@@ -597,6 +605,17 @@ func (m *Model) handleTabKey() (tea.Model, tea.Cmd) {
 	if m.viewMode == ViewProblems {
 		// In problems view, Tab cycles through problem agents
 		return m.selectNextProblem()
+	}
+	if m.viewMode == ViewAgents && m.showSummary {
+		// In split view, Tab toggles between events and summary
+		m.mu.Lock()
+		if m.focusedPanel == PanelAgents {
+			m.focusedPanel = PanelSummary
+		} else {
+			m.focusedPanel = PanelAgents
+		}
+		m.mu.Unlock()
+		return m, nil
 	}
 	// In activity view, Tab cycles panels
 	m.mu.Lock()
@@ -1020,7 +1039,7 @@ func (m *Model) triggerSummaryLocked() {
 		return
 	}
 
-	// Collect events from the last SummaryWindow
+	// Collect events from the last SummaryWindow, skipping idle noise
 	cutoff := time.Now().Add(-SummaryWindow)
 	var recent []Event
 	for i := len(m.agentEvents) - 1; i >= 0 && len(recent) < 30; i-- {
@@ -1031,11 +1050,50 @@ func (m *Model) triggerSummaryLocked() {
 		if m.agentRigFilter != "" && e.Rig != m.agentRigFilter {
 			continue
 		}
+		if isIdleEvent(e) {
+			continue
+		}
 		recent = append(recent, e)
+	}
+
+	// Don't re-summarize if no meaningful events
+	if len(recent) == 0 {
+		return
 	}
 
 	m.lastSummaryRefresh = time.Now()
 	m.summaryProvider.Summarize(recent)
+}
+
+// isIdleEvent returns true for heartbeat/patrol/monitoring events that
+// shouldn't trigger AI re-summarization.
+func isIdleEvent(e Event) bool {
+	msg := strings.ToLower(e.Message)
+	// Refinery patrol cycles
+	if e.Role == "refinery" {
+		if strings.Contains(msg, "patrol") || strings.Contains(msg, "queue empty") ||
+			strings.Contains(msg, "empty cycle") || strings.Contains(msg, "session is health") ||
+			strings.Contains(msg, "gt mq list") || strings.Contains(msg, "git fetch") ||
+			strings.Contains(msg, "gt handoff") || strings.Contains(msg, "gt prime") ||
+			strings.Contains(msg, "gt mol step") {
+			return true
+		}
+	}
+	// Witness patrol
+	if e.Role == "witness" {
+		if strings.Contains(msg, "patrol") || strings.Contains(msg, "health") ||
+			strings.Contains(msg, "gt prime") {
+			return true
+		}
+	}
+	// Deacon/dog maintenance
+	if e.Role == "deacon" || strings.Contains(e.Actor, "dog") {
+		if strings.Contains(msg, "reaper") || strings.Contains(msg, "gt dog") ||
+			strings.Contains(msg, "triage") {
+			return true
+		}
+	}
+	return false
 }
 
 // cycleRigFilter cycles through known rigs: all → rig1 → rig2 → ... → all

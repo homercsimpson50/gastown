@@ -670,9 +670,9 @@ func (m *Model) renderAgentEvent(e Event) string {
 // renderAgentsSplitView renders the agents view with a summary panel on the right.
 func (m *Model) renderAgentsSplitView() string {
 	// Split width: 65% events, 35% summary
-	totalWidth := m.width - 2
+	totalWidth := m.width - 4
 	eventsWidth := totalWidth * 65 / 100
-	summaryWidth := totalWidth - eventsWidth - 3 // 3 for border between panels
+	summaryWidth := totalWidth - eventsWidth - 1 // 1 for divider
 
 	if eventsWidth < 40 {
 		eventsWidth = 40
@@ -681,26 +681,53 @@ func (m *Model) renderAgentsSplitView() string {
 		summaryWidth = 20
 	}
 
-	// Left panel: events (truncated to fit)
+	// Calculate available height for content
+	panelHeight := m.agentsViewport.Height
+	if panelHeight < 5 {
+		panelHeight = 10
+	}
+
+	// Left panel: events
 	eventsContent := m.renderAgentsFeed()
 	eventsStyle := lipgloss.NewStyle().
 		Width(eventsWidth).
 		MaxWidth(eventsWidth).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240"))
+		Height(panelHeight).
+		MaxHeight(panelHeight)
 
-	// Right panel: summary
-	summaryContent := m.renderSummaryContent(summaryWidth - 4)
+	// Grey divider line
+	dividerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Height(panelHeight).
+		MaxHeight(panelHeight)
+	divider := strings.Repeat("│\n", panelHeight)
+	if len(divider) > 0 {
+		divider = divider[:len(divider)-1] // trim trailing newline
+	}
+
+	// Right panel: summary (uses viewport for scrolling)
+	summaryContent := m.renderSummaryContent(summaryWidth - 2)
+	m.summaryViewport.Width = summaryWidth - 2
+	m.summaryViewport.Height = panelHeight
+	m.summaryViewport.SetContent(summaryContent)
+
+	summaryBorder := lipgloss.Color("240")
+	if m.focusedPanel == PanelSummary {
+		summaryBorder = lipgloss.Color("63")
+	}
 	summaryStyle := lipgloss.NewStyle().
 		Width(summaryWidth).
 		MaxWidth(summaryWidth).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("63"))
+		Height(panelHeight).
+		MaxHeight(panelHeight).
+		PaddingLeft(1).
+		BorderForeground(summaryBorder)
 
 	left := eventsStyle.Render(eventsContent)
-	right := summaryStyle.Render(summaryContent)
+	mid := dividerStyle.Render(divider)
+	right := summaryStyle.Render(m.summaryViewport.View())
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, mid, right)
 }
 
 // renderSummaryContent renders the AI summary panel content.
