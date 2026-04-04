@@ -25,6 +25,7 @@ var (
 	feedWindow   bool
 	feedPlain    bool
 	feedProblems bool
+	feedAgents   bool
 )
 
 func init() {
@@ -40,6 +41,7 @@ func init() {
 	feedCmd.Flags().BoolVarP(&feedWindow, "window", "w", false, "Open in dedicated tmux window (creates 'feed' window)")
 	feedCmd.Flags().BoolVar(&feedPlain, "plain", false, "Use plain text output (bd activity) instead of TUI")
 	feedCmd.Flags().BoolVarP(&feedProblems, "problems", "p", false, "Start in problems view (shows stuck agents)")
+	feedCmd.Flags().BoolVarP(&feedAgents, "agents", "a", false, "Start in agents view (shows real-time agent tool calls from VictoriaLogs)")
 }
 
 var feedCmd = &cobra.Command{
@@ -53,6 +55,14 @@ By default, launches an interactive TUI dashboard with:
   - Convoy panel (middle): Shows in-progress and recently landed convoys
   - Event stream (bottom): Chronological feed you can scroll through
   - Vim-style navigation: j/k to scroll, tab to switch panels, 1/2/3 for panels, q to quit
+
+Agents View (--agents/-a):
+  Real-time agent observability showing what agents are doing moment-to-moment:
+  - Queries VictoriaLogs for agent tool-call events
+  - Summarizes tool calls into human-readable 1-line descriptions
+  - Shows Read/Write/Edit/Bash/Grep calls with context
+  - Filter by session, scroll through history
+  - Press 'a' to toggle between activity and agents view
 
 Problems View (--problems/-p):
   A problem-first view that surfaces agents needing attention:
@@ -98,6 +108,8 @@ MQ (Merge Queue) event symbols:
 
 Examples:
   gt feed                       # Launch TUI dashboard
+  gt feed --agents              # Start in agents view (tool-call observability)
+  gt feed -a                    # Short flag for agents view
   gt feed --problems            # Start in problems view
   gt feed -p                    # Short flag for problems view
   gt feed --plain               # Plain text output (bd activity)
@@ -152,7 +164,7 @@ func runFeed(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("rig '%s' not found or has no .beads directory", feedRig)
 			}
 		}
-		return runFeedTUI(workDir, feedProblems)
+		return runFeedTUI(workDir, feedProblems, feedAgents)
 	}
 
 	// Plain mode: --rig is a pure event filter via PrintOptions.Rig
@@ -230,7 +242,7 @@ func runFeedDirect(townRoot string) error {
 }
 
 // runFeedTUI runs the interactive TUI feed.
-func runFeedTUI(workDir string, problemsView bool) error {
+func runFeedTUI(workDir string, problemsView, agentsView bool) error {
 	// Must be in a Gas Town workspace
 	townRoot, err := workspace.FindFromCwdOrError()
 	if err != nil {
@@ -257,26 +269,43 @@ func runFeedTUI(workDir string, problemsView bool) error {
 		sources = append(sources, gtSource)
 	}
 
-	if len(sources) == 0 {
+	// For non-agents views, require at least one event source
+	if !agentsView && len(sources) == 0 {
 		return fmt.Errorf("no event sources available (check that .events.jsonl exists in %s)", townRoot)
 	}
 
-	// Combine all sources
-	multiSource := feed.NewMultiSource(sources...)
-	defer func() { _ = multiSource.Close() }()
+	// Combine all activity sources (may be empty in agents-only mode)
+	var multiSource *feed.MultiSource
+	if len(sources) > 0 {
+		multiSource = feed.NewMultiSource(sources...)
+		defer func() { _ = multiSource.Close() }()
+	}
 
 	// Create beads instance for agent health detection
 	bd := beads.New(townRoot)
 
 	// Create model and connect event source
 	var m *feed.Model
-	if problemsView {
+	switch {
+	case agentsView:
+		m = feed.NewModelWithAgentsView(bd)
+	case problemsView:
 		m = feed.NewModelWithProblemsView(bd)
-	} else {
+	default:
 		m = feed.NewModel(bd)
 	}
-	m.SetEventChannel(multiSource.Events())
+
+	if multiSource != nil {
+		m.SetEventChannel(multiSource.Events())
+	}
 	m.SetTownRoot(townRoot)
+
+	// Set up agent event source from VictoriaLogs
+	agentsSource, err := feed.NewAgentsSource("")
+	if err == nil {
+		m.SetAgentEventChannel(agentsSource.Events())
+		defer func() { _ = agentsSource.Close() }()
+	}
 
 	// Run the TUI
 	p := tea.NewProgram(m, tea.WithAltScreen())

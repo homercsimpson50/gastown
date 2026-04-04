@@ -20,7 +20,11 @@ func (m *Model) render() string {
 	// Header
 	sections = append(sections, m.renderHeader())
 
-	if m.viewMode == ViewProblems {
+	if m.viewMode == ViewAgents {
+		// Agents view: single panel showing agent tool calls
+		agentsPanel := m.renderAgentsPanel()
+		sections = append(sections, agentsPanel)
+	} else if m.viewMode == ViewProblems {
 		// Problems view: single panel
 		problemsPanel := m.renderProblemsPanel()
 		sections = append(sections, problemsPanel)
@@ -53,15 +57,26 @@ func (m *Model) render() string {
 // renderHeader renders the top header bar
 func (m *Model) renderHeader() string {
 	var title string
-	if m.viewMode == ViewProblems {
+	switch m.viewMode {
+	case ViewAgents:
+		title = TitleStyle.Render("GT Feed") + " " + AgentsModeStyle.Render("[AGENTS]")
+	case ViewProblems:
 		title = TitleStyle.Render("GT Feed") + " " + ProblemsModeStyle.Render("[PROBLEMS]")
-	} else {
+	default:
 		title = TitleStyle.Render("GT Feed")
 	}
 
 	// Show summary stats on the right
 	var stats string
-	if m.viewMode == ViewProblems && len(m.problemAgents) > 0 {
+	if m.viewMode == ViewAgents {
+		healthy := ""
+		if m.agentsHealthy {
+			healthy = AgentActiveStyle.Render("●") + " VictoriaLogs"
+		} else {
+			healthy = EventFailStyle.Render("●") + " VictoriaLogs"
+		}
+		stats = fmt.Sprintf("%d events  %s", len(m.agentEvents), healthy)
+	} else if m.viewMode == ViewProblems && len(m.problemAgents) > 0 {
 		ok, stuck, idle := m.countAgentStates()
 		stats = fmt.Sprintf("%d agents  %s %d ok │ %s %d stuck │ %d idle",
 			len(m.problemAgents),
@@ -480,7 +495,12 @@ func (m *Model) renderEvent(e Event) string {
 // renderStatusBar renders the bottom status bar.
 func (m *Model) renderStatusBar() string {
 	var left string
-	if m.viewMode == ViewProblems {
+	if m.viewMode == ViewAgents {
+		left = fmt.Sprintf("[agents] %d tool calls", len(m.agentEvents))
+		if m.agentSessionFilter != "" {
+			left += fmt.Sprintf(" | session: %s", m.agentSessionFilter)
+		}
+	} else if m.viewMode == ViewProblems {
 		// Problems view: show problem count and selected agent
 		problemCount := 0
 		for _, agent := range m.problemAgents {
@@ -520,6 +540,16 @@ func (m *Model) renderStatusBar() string {
 
 // renderShortHelp renders abbreviated key hints
 func (m *Model) renderShortHelp() string {
+	if m.viewMode == ViewAgents {
+		hints := []string{
+			HelpKeyStyle.Render("a") + HelpDescStyle.Render(":activity"),
+			HelpKeyStyle.Render("j/k") + HelpDescStyle.Render(":scroll"),
+			HelpKeyStyle.Render("R") + HelpDescStyle.Render(":refresh"),
+			HelpKeyStyle.Render("?") + HelpDescStyle.Render(":help"),
+			HelpKeyStyle.Render("q") + HelpDescStyle.Render(":quit"),
+		}
+		return strings.Join(hints, "  ")
+	}
 	if m.viewMode == ViewProblems {
 		hints := []string{
 			HelpKeyStyle.Render("p") + HelpDescStyle.Render(":activity"),
@@ -533,6 +563,7 @@ func (m *Model) renderShortHelp() string {
 		return strings.Join(hints, "  ")
 	}
 	hints := []string{
+		HelpKeyStyle.Render("a") + HelpDescStyle.Render(":agents"),
 		HelpKeyStyle.Render("p") + HelpDescStyle.Render(":problems"),
 		HelpKeyStyle.Render("j/k") + HelpDescStyle.Render(":scroll"),
 		HelpKeyStyle.Render("tab") + HelpDescStyle.Render(":switch"),
@@ -541,6 +572,72 @@ func (m *Model) renderShortHelp() string {
 		HelpKeyStyle.Render("?") + HelpDescStyle.Render(":help"),
 	}
 	return strings.Join(hints, "  ")
+}
+
+// renderAgentsPanel renders the agents observability panel with border
+func (m *Model) renderAgentsPanel() string {
+	style := AgentsPanelStyle
+	if m.focusedPanel == PanelAgents {
+		style = FocusedBorderStyle
+	}
+	return style.Width(m.width - 2).Render(m.agentsViewport.View())
+}
+
+// renderAgentsFeed renders the agent tool-call feed content.
+// Caller must hold m.mu.
+func (m *Model) renderAgentsFeed() string {
+	if len(m.agentEvents) == 0 {
+		if !m.agentsHealthy {
+			return AgentIdleStyle.Render("Connecting to VictoriaLogs...\n\n" +
+				"Ensure VictoriaLogs is running and GT_VLOGS_QUERY_URL is set.\n" +
+				"Default: http://localhost:9428/select/logsql/query")
+		}
+		return AgentIdleStyle.Render("No agent events yet. Waiting for tool calls...")
+	}
+
+	var lines []string
+
+	// Show events in reverse chronological order (newest first)
+	start := 0
+	if len(m.agentEvents) > 200 {
+		start = len(m.agentEvents) - 200
+	}
+
+	for i := len(m.agentEvents) - 1; i >= start; i-- {
+		e := m.agentEvents[i]
+		lines = append(lines, m.renderAgentEvent(e))
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// renderAgentEvent renders a single agent tool-call event line.
+// Format: "03:42:01  mayor    Read CHRONICLE.md (lines 1-50)"
+func (m *Model) renderAgentEvent(e Event) string {
+	// Timestamp
+	ts := TimestampStyle.Render(e.Time.Local().Format("15:04:05"))
+
+	// Actor (short form, right-padded)
+	actor := "unknown"
+	if e.Actor != "" {
+		parts := strings.Split(e.Actor, "/")
+		actor = parts[len(parts)-1]
+	}
+	if len(actor) > 10 {
+		actor = actor[:10]
+	}
+	actorStr := fmt.Sprintf("%-10s", actor)
+
+	// Role icon
+	icon := RoleIcons[e.Role]
+	if icon == "" {
+		icon = "•"
+	}
+
+	// Message (already summarized by the source)
+	msg := e.Message
+
+	return fmt.Sprintf("%s  %s %s %s", ts, icon, RoleStyle.Render(actorStr), msg)
 }
 
 // formatAge formats a duration as a short age string

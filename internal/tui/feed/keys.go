@@ -29,6 +29,9 @@ type KeyMap struct {
 	Nudge          key.Binding
 	Handoff        key.Binding
 
+	// Agents view
+	ToggleAgents key.Binding
+
 	// Search/Filter
 	Search      key.Binding
 	Filter      key.Binding
@@ -110,6 +113,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("h"),
 			key.WithHelp("h", "handoff agent"),
 		),
+		ToggleAgents: key.NewBinding(
+			key.WithKeys("a"),
+			key.WithHelp("a", "toggle agents view"),
+		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),
 			key.WithHelp("/", "search"),
@@ -143,7 +150,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Top, k.Bottom},
 		{k.Tab, k.FocusTree, k.FocusConvoy, k.FocusFeed, k.Enter, k.Expand},
-		{k.ToggleProblems, k.Nudge, k.Handoff},
+		{k.ToggleProblems, k.ToggleAgents, k.Nudge, k.Handoff},
 		{k.Search, k.Filter, k.ClearFilter, k.Refresh},
 		{k.Help, k.Quit},
 	}

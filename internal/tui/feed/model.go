@@ -23,6 +23,7 @@ const (
 	PanelConvoy
 	PanelFeed
 	PanelProblems // Problems panel in problems view
+	PanelAgents   // Agents panel in agents view
 )
 
 // ViewMode represents which view is active
@@ -31,6 +32,7 @@ type ViewMode int
 const (
 	ViewActivity ViewMode = iota // Default activity stream view
 	ViewProblems                 // Problem-first view
+	ViewAgents                   // Agent observability view (tool calls from VictoriaLogs)
 )
 
 // Layout constants for panel height distribution and event history.
@@ -107,6 +109,14 @@ type Model struct {
 	lastProblemsCheck time.Time
 	problemsError     error // last error from problems fetch
 
+	// Agents view state
+	agentEvents        []Event           // agent tool-call events from VictoriaLogs
+	agentsViewport     viewport.Model
+	agentsEventChan    <-chan Event       // channel for agent events from VictoriaLogs
+	agentSessionFilter string            // filter events by session ID
+	lastSeenAgentTime  time.Time         // for deduplication
+	agentsHealthy      bool              // whether VictoriaLogs is reachable
+
 	// Event source
 	eventChan <-chan Event
 	done      chan struct{}
@@ -116,8 +126,9 @@ type Model struct {
 	// events, rigs, convoyState, eventChan, townRoot, width, height,
 	// focusedPanel, showHelp, help, filter, viewMode, problemAgents,
 	// selectedProblem, selectedBeadID, problemsError, lastProblemsCheck,
-	// and all viewports. Write lock is held during Update/handleKey
-	// mutations; read lock is held during View/render.
+	// agentEvents, agentsEventChan, agentSessionFilter, lastSeenAgentTime,
+	// agentsHealthy, and all viewports. Write lock is held during
+	// Update/handleKey mutations; read lock is held during View/render.
 	mu sync.RWMutex
 }
 
@@ -133,8 +144,10 @@ func NewModel(bd *beads.Beads) *Model {
 		convoyViewport:   viewport.New(0, 0),
 		feedViewport:     viewport.New(0, 0),
 		problemsViewport: viewport.New(0, 0),
+		agentsViewport:   viewport.New(0, 0),
 		rigs:             make(map[string]*Rig),
 		events:           make([]Event, 0, maxEventHistory),
+		agentEvents:      make([]Event, 0, maxEventHistory),
 		problemAgents:    make([]*ProblemAgent, 0),
 		keys:             DefaultKeyMap(),
 		help:             h,
@@ -150,6 +163,15 @@ func NewModelWithProblemsView(bd *beads.Beads) *Model {
 	m := NewModel(bd)
 	m.viewMode = ViewProblems
 	m.focusedPanel = PanelProblems
+	return m
+}
+
+// NewModelWithAgentsView creates a new feed TUI model starting in agents view.
+// The bd parameter provides access to agent beads for health detection.
+func NewModelWithAgentsView(bd *beads.Beads) *Model {
+	m := NewModel(bd)
+	m.viewMode = ViewAgents
+	m.focusedPanel = PanelAgents
 	return m
 }
 
@@ -172,6 +194,10 @@ func (m *Model) Init() tea.Cmd {
 	if m.viewMode == ViewProblems {
 		cmds = append(cmds, m.fetchProblems())
 	}
+	// If starting in agents view, listen for agent events
+	if m.viewMode == ViewAgents {
+		cmds = append(cmds, m.listenForAgentEvents())
+	}
 	return tea.Batch(cmds...)
 }
 
@@ -192,6 +218,9 @@ type problemsUpdateMsg struct {
 
 // problemsTickMsg is sent to trigger the next problems refresh
 type problemsTickMsg struct{}
+
+// agentEventMsg is sent when a new agent event arrives from VictoriaLogs
+type agentEventMsg Event
 
 // tickMsg is sent periodically to refresh the view
 type tickMsg time.Time
@@ -218,6 +247,36 @@ func (m *Model) listenForEvents() tea.Cmd {
 			return nil
 		}
 	}
+}
+
+// listenForAgentEvents returns a command that listens for agent events from VictoriaLogs.
+func (m *Model) listenForAgentEvents() tea.Cmd {
+	m.mu.RLock()
+	agentsChan := m.agentsEventChan
+	done := m.done
+	m.mu.RUnlock()
+
+	if agentsChan == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		select {
+		case event, ok := <-agentsChan:
+			if !ok {
+				return nil
+			}
+			return agentEventMsg(event)
+		case <-done:
+			return nil
+		}
+	}
+}
+
+// SetAgentEventChannel sets the channel to receive agent events from VictoriaLogs.
+func (m *Model) SetAgentEventChannel(ch <-chan Event) {
+	m.mu.Lock()
+	m.agentsEventChan = ch
+	m.mu.Unlock()
 }
 
 // tick returns a command for periodic refresh
@@ -288,6 +347,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addEvent(Event(msg))
 		cmds = append(cmds, m.listenForEvents())
 
+	case agentEventMsg:
+		m.addAgentEvent(Event(msg))
+		cmds = append(cmds, m.listenForAgentEvents())
+
 	case convoyUpdateMsg:
 		if msg.state != nil {
 			// Fresh data arrived - update state and schedule next tick
@@ -353,6 +416,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.feedViewport, cmd = m.feedViewport.Update(msg)
 	case PanelProblems:
 		m.problemsViewport, cmd = m.problemsViewport.Update(msg)
+	case PanelAgents:
+		m.agentsViewport, cmd = m.agentsViewport.Update(msg)
 	}
 	m.mu.Unlock()
 	cmds = append(cmds, cmd)
@@ -376,6 +441,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.ToggleProblems):
 		return m.toggleProblemsView()
+
+	case key.Matches(msg, m.keys.ToggleAgents):
+		return m.toggleAgentsView()
 
 	case key.Matches(msg, m.keys.Tab):
 		return m.handleTabKey()
@@ -449,6 +517,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.feedViewport, cmd = m.feedViewport.Update(msg)
 	case PanelProblems:
 		m.problemsViewport, cmd = m.problemsViewport.Update(msg)
+	case PanelAgents:
+		m.agentsViewport, cmd = m.agentsViewport.Update(msg)
 	}
 	m.mu.Unlock()
 	return m, cmd
@@ -474,6 +544,23 @@ func (m *Model) toggleProblemsView() (tea.Model, tea.Cmd) {
 		return m, m.fetchProblems()
 	}
 	return m, nil
+}
+
+// toggleAgentsView switches between activity and agents view
+func (m *Model) toggleAgentsView() (tea.Model, tea.Cmd) {
+	m.mu.Lock()
+	if m.viewMode == ViewAgents {
+		m.viewMode = ViewActivity
+		m.focusedPanel = PanelTree
+		m.mu.Unlock()
+		m.updateViewportSizes()
+		return m, nil
+	}
+	m.viewMode = ViewAgents
+	m.focusedPanel = PanelAgents
+	m.mu.Unlock()
+	m.updateViewportSizes()
+	return m, m.listenForAgentEvents()
 }
 
 // handleTabKey handles Tab key for panel/problem cycling
@@ -691,7 +778,7 @@ func (m *Model) updateViewportSizes() {
 		helpHeight = 3
 	}
 	borderHeight := 6 // top and bottom borders for 3 panels
-	if m.viewMode == ViewProblems {
+	if m.viewMode == ViewProblems || m.viewMode == ViewAgents {
 		borderHeight = 2 // single panel
 	}
 
@@ -705,7 +792,11 @@ func (m *Model) updateViewportSizes() {
 		contentWidth = 20
 	}
 
-	if m.viewMode == ViewProblems {
+	if m.viewMode == ViewAgents {
+		// Agents view: single large panel
+		m.agentsViewport.Width = contentWidth
+		m.agentsViewport.Height = availableHeight
+	} else if m.viewMode == ViewProblems {
 		// Problems view: single large panel
 		m.problemsViewport.Width = contentWidth
 		m.problemsViewport.Height = availableHeight
@@ -748,9 +839,12 @@ func (m *Model) updateViewContent() {
 // updateViewContentLocked refreshes viewport content.
 // Caller must hold m.mu.
 func (m *Model) updateViewContentLocked() {
-	if m.viewMode == ViewProblems {
+	switch m.viewMode {
+	case ViewAgents:
+		m.agentsViewport.SetContent(m.renderAgentsFeed())
+	case ViewProblems:
 		m.problemsViewport.SetContent(m.renderProblemsContent())
-	} else {
+	default:
 		m.treeViewport.SetContent(m.renderTree())
 		m.convoyViewport.SetContent(m.renderConvoys())
 		m.feedViewport.SetContent(m.renderFeed())
@@ -837,6 +931,25 @@ func (m *Model) addEventLocked(e Event) bool {
 	}
 
 	return true
+}
+
+// addAgentEvent adds an agent event from VictoriaLogs to the agents feed.
+func (m *Model) addAgentEvent(e Event) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Deduplicate: skip events we've already seen (by timestamp)
+	if !m.lastSeenAgentTime.IsZero() && !e.Time.After(m.lastSeenAgentTime) {
+		return
+	}
+	m.lastSeenAgentTime = e.Time
+
+	m.agentEvents = append(m.agentEvents, e)
+	if len(m.agentEvents) > maxEventHistory {
+		m.agentEvents = m.agentEvents[len(m.agentEvents)-maxEventHistory:]
+	}
+
+	m.updateViewContentLocked()
 }
 
 // SetEventChannel sets the channel to receive events from.

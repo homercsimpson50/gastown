@@ -162,6 +162,16 @@ var (
 	ZombieStyle = lipgloss.NewStyle().
 			Foreground(colorDim)
 
+	// Agents view styles
+	AgentsModeStyle = lipgloss.NewStyle().
+			Foreground(colorHighlight).
+			Bold(true)
+
+	AgentsPanelStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorDim).
+				Padding(0, 1)
+
 	// Event symbols
 	EventSymbols = map[string]string{
 		"create":   "+",
