@@ -186,7 +186,7 @@ func (sp *SummaryProvider) generate(events []Event) (string, time.Duration, erro
 		lines = append(lines, line)
 	}
 
-	prompt := fmt.Sprintf(`Summarize these software agent events in 1-2 SHORT sentences. Max 30 words. Say WHO is doing WHAT. No filler.
+	prompt := fmt.Sprintf(`Summarize these software agent events in 1-2 SHORT sentences. Max 30 words. Say WHO is doing WHAT. No filler. No markdown formatting.
 
 Events:
 %s
