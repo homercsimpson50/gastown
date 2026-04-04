@@ -2,6 +2,7 @@ package feed
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"time"
 
@@ -61,6 +62,12 @@ func (s *AgentsSource) fetchAndEmit(ctx context.Context, since time.Duration, li
 	if err != nil {
 		return // silently skip on error; VictoriaLogs may be unavailable
 	}
+
+	// VictoriaLogs returns newest-first; sort oldest-first so the dedup
+	// logic in addAgentEvent (which tracks lastSeenAgentTime) works correctly.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Time < entries[j].Time
+	})
 
 	for _, entry := range entries {
 		event := agentEntryToEvent(entry)
