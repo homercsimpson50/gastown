@@ -15,14 +15,25 @@ type toolCall struct {
 }
 
 // SummarizeToolUse produces a concise 1-line description of a tool_use event.
-// Handles two formats:
+// Handles three formats:
 //  1. Wrapped: {"type":"tool_use","name":"Bash","input":{"command":"..."}}
-//  2. Raw content: {"command":"gt done","timeout":60000} (tool name inferred from fields)
+//  2. Prefixed: Bash: {"command":"gt done","timeout":60000}
+//  3. Raw JSON: {"command":"gt done","timeout":60000}
 func SummarizeToolUse(content string) string {
 	// Try wrapped format first
 	var tc toolCall
 	if err := json.Unmarshal([]byte(content), &tc); err == nil && tc.Name != "" {
 		return summarizeTool(tc.Name, tc.Input)
+	}
+
+	// Try prefixed format: "ToolName: {json...}"
+	if idx := strings.Index(content, ": {"); idx > 0 && idx < 30 {
+		toolName := content[:idx]
+		jsonPart := content[idx+2:]
+		var input map[string]interface{}
+		if err := json.Unmarshal([]byte(jsonPart), &input); err == nil {
+			return summarizeTool(toolName, input)
+		}
 	}
 
 	// Try raw input format — infer tool from fields present
