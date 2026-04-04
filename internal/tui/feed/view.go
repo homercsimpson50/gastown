@@ -21,9 +21,14 @@ func (m *Model) render() string {
 	sections = append(sections, m.renderHeader())
 
 	if m.viewMode == ViewAgents {
-		// Agents view: single panel showing agent tool calls
-		agentsPanel := m.renderAgentsPanel()
-		sections = append(sections, agentsPanel)
+		if m.showSummary {
+			// Split-screen: events left, summary right
+			sections = append(sections, m.renderAgentsSplitView())
+		} else {
+			// Full-width events
+			agentsPanel := m.renderAgentsPanel()
+			sections = append(sections, agentsPanel)
+		}
 	} else if m.viewMode == ViewProblems {
 		// Problems view: single panel
 		problemsPanel := m.renderProblemsPanel()
@@ -544,12 +549,16 @@ func (m *Model) renderStatusBar() string {
 // renderShortHelp renders abbreviated key hints
 func (m *Model) renderShortHelp() string {
 	if m.viewMode == ViewAgents {
+		summaryHint := HelpKeyStyle.Render("s") + HelpDescStyle.Render(":summary")
+		if m.showSummary {
+			summaryHint = HelpKeyStyle.Render("s") + HelpDescStyle.Render(":hide summary")
+		}
 		hints := []string{
 			HelpKeyStyle.Render("a") + HelpDescStyle.Render(":activity"),
 			HelpKeyStyle.Render("r") + HelpDescStyle.Render(":rig"),
+			summaryHint,
 			HelpKeyStyle.Render("j/k") + HelpDescStyle.Render(":scroll"),
 			HelpKeyStyle.Render("R") + HelpDescStyle.Render(":refresh"),
-			HelpKeyStyle.Render("?") + HelpDescStyle.Render(":help"),
 			HelpKeyStyle.Render("q") + HelpDescStyle.Render(":quit"),
 		}
 		return strings.Join(hints, "  ")
@@ -656,6 +665,106 @@ func (m *Model) renderAgentEvent(e Event) string {
 	msg := e.Message
 
 	return fmt.Sprintf("%s  %s %s %s %s", ts, rigStr, icon, RoleStyle.Render(actorStr), msg)
+}
+
+// renderAgentsSplitView renders the agents view with a summary panel on the right.
+func (m *Model) renderAgentsSplitView() string {
+	// Split width: 65% events, 35% summary
+	totalWidth := m.width - 2
+	eventsWidth := totalWidth * 65 / 100
+	summaryWidth := totalWidth - eventsWidth - 3 // 3 for border between panels
+
+	if eventsWidth < 40 {
+		eventsWidth = 40
+	}
+	if summaryWidth < 20 {
+		summaryWidth = 20
+	}
+
+	// Left panel: events (truncated to fit)
+	eventsContent := m.renderAgentsFeed()
+	eventsStyle := lipgloss.NewStyle().
+		Width(eventsWidth).
+		MaxWidth(eventsWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240"))
+
+	// Right panel: summary
+	summaryContent := m.renderSummaryContent(summaryWidth - 4)
+	summaryStyle := lipgloss.NewStyle().
+		Width(summaryWidth).
+		MaxWidth(summaryWidth).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("63"))
+
+	left := eventsStyle.Render(eventsContent)
+	right := summaryStyle.Render(summaryContent)
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+// renderSummaryContent renders the AI summary panel content.
+func (m *Model) renderSummaryContent(width int) string {
+	var lines []string
+
+	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("63")).Render("AI Summary")
+	lines = append(lines, header)
+	lines = append(lines, "")
+
+	if !m.summaryProvider.Available() {
+		lines = append(lines, AgentIdleStyle.Render("Ollama not running."))
+		lines = append(lines, "")
+		lines = append(lines, AgentIdleStyle.Render("Start with:"))
+		lines = append(lines, AgentIdleStyle.Render("  brew services start ollama"))
+		return strings.Join(lines, "\n")
+	}
+
+	if m.summaryProvider.IsSummarizing() {
+		lines = append(lines, AgentIdleStyle.Render("Summarizing..."))
+		lines = append(lines, "")
+	}
+
+	text, age, dur := m.summaryProvider.Summary()
+	if text == "" {
+		lines = append(lines, AgentIdleStyle.Render("Waiting for events..."))
+	} else {
+		// Word-wrap the summary to fit the panel width
+		wrapped := wordWrap(text, width)
+		lines = append(lines, wrapped)
+		lines = append(lines, "")
+
+		// Stats line
+		ageStr := formatAge(age)
+		durStr := fmt.Sprintf("%.1fs", dur.Seconds())
+		stats := TimestampStyle.Render(fmt.Sprintf("Updated %s ago (%s)", ageStr, durStr))
+		lines = append(lines, stats)
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// wordWrap wraps text to the given width.
+func wordWrap(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return ""
+	}
+
+	var lines []string
+	line := words[0]
+	for _, w := range words[1:] {
+		if len(line)+1+len(w) > width {
+			lines = append(lines, line)
+			line = w
+		} else {
+			line += " " + w
+		}
+	}
+	lines = append(lines, line)
+	return strings.Join(lines, "\n")
 }
 
 // formatAge formats a duration as a short age string

@@ -32,6 +32,7 @@ type KeyMap struct {
 	// Agents view
 	ToggleAgents key.Binding
 	CycleRig     key.Binding
+	ToggleSummary key.Binding
 
 	// Search/Filter
 	Search      key.Binding
@@ -121,6 +122,10 @@ func DefaultKeyMap() KeyMap {
 		CycleRig: key.NewBinding(
 			key.WithKeys("r"),
 			key.WithHelp("r", "cycle rig filter"),
+		),
+		ToggleSummary: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "AI summary"),
 		),
 		Search: key.NewBinding(
 			key.WithKeys("/"),

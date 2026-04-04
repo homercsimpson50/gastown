@@ -120,6 +120,11 @@ type Model struct {
 	lastSeenAgentTime  time.Time         // for deduplication
 	agentsHealthy      bool              // whether VictoriaLogs is reachable
 
+	// Summary panel (local LLM via Ollama)
+	summaryProvider    *SummaryProvider
+	showSummary        bool              // toggle split-screen summary
+	lastSummaryRefresh time.Time         // when we last triggered a summary
+
 	// Event source
 	eventChan <-chan Event
 	done      chan struct{}
@@ -157,6 +162,7 @@ func NewModel(bd *beads.Beads) *Model {
 		done:             make(chan struct{}),
 		viewMode:         ViewActivity,
 		stuckDetector:    NewStuckDetector(bd),
+		summaryProvider:  NewSummaryProvider(),
 	}
 }
 
@@ -404,6 +410,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
+		// Refresh summary periodically if panel is visible
+		m.mu.Lock()
+		if m.showSummary && m.summaryProvider.Available() && time.Since(m.lastSummaryRefresh) >= SummaryInterval {
+			m.triggerSummaryLocked()
+		}
+		// Update view to pick up new summary text
+		if m.showSummary {
+			m.updateViewContentLocked()
+		}
+		m.mu.Unlock()
 		cmds = append(cmds, tick())
 	}
 
@@ -444,6 +460,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.ToggleProblems):
 		return m.toggleProblemsView()
+
+	case key.Matches(msg, m.keys.ToggleSummary):
+		if m.viewMode == ViewAgents {
+			return m.toggleSummary()
+		}
 
 	case key.Matches(msg, m.keys.CycleRig):
 		if m.viewMode == ViewAgents {
@@ -973,6 +994,48 @@ func (m *Model) addAgentEvent(e Event) {
 	}
 
 	m.updateViewContentLocked()
+}
+
+// toggleSummary toggles the AI summary split-screen panel.
+func (m *Model) toggleSummary() (tea.Model, tea.Cmd) {
+	m.mu.Lock()
+	m.showSummary = !m.showSummary
+	if m.showSummary && m.summaryProvider.Available() {
+		// Trigger an immediate summary
+		m.triggerSummaryLocked()
+	}
+	m.updateViewContentLocked()
+	m.mu.Unlock()
+	m.updateViewportSizes()
+	return m, nil
+}
+
+// triggerSummaryLocked sends recent events to the LLM for summarization.
+// Caller must hold m.mu.
+func (m *Model) triggerSummaryLocked() {
+	if !m.showSummary || !m.summaryProvider.Available() {
+		return
+	}
+	if m.summaryProvider.IsSummarizing() {
+		return
+	}
+
+	// Collect events from the last SummaryWindow
+	cutoff := time.Now().Add(-SummaryWindow)
+	var recent []Event
+	for i := len(m.agentEvents) - 1; i >= 0 && len(recent) < 30; i-- {
+		e := m.agentEvents[i]
+		if e.Time.Before(cutoff) {
+			break
+		}
+		if m.agentRigFilter != "" && e.Rig != m.agentRigFilter {
+			continue
+		}
+		recent = append(recent, e)
+	}
+
+	m.lastSummaryRefresh = time.Now()
+	m.summaryProvider.Summarize(recent)
 }
 
 // cycleRigFilter cycles through known rigs: all → rig1 → rig2 → ... → all
