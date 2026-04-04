@@ -19,6 +19,9 @@ RUN apt-get update && apt-get install -y \
     netcat-openbsd \
     tini \
     vim \
+    dbus dbus-x11 \
+    gnome-keyring \
+    libsecret-1-0 libsecret-1-dev \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install Go from official tarball (apt golang-go is too old)

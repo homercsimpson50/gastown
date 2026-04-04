@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Container keyring support** — Dockerfile now includes `dbus`, `gnome-keyring`,
+  and `libsecret` so Claude Code can persist OAuth credentials on Linux containers.
+  Entrypoint starts D-Bus session and unlocks keyring automatically.
+
+### Fixed
+
+- **Container `/login` not persisting** — Claude Code OAuth tokens were lost between
+  prompts because `~/.claude` was bind-mounted read-only from the host with no
+  keyring daemon available. Entrypoint now starts `gnome-keyring-daemon` and
+  exports `DBUS_SESSION_BUS_ADDRESS` to the sandbox env file.
+
 ## [1.0.0] - 2026-04-02
 
 ### Added
