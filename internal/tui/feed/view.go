@@ -497,6 +497,9 @@ func (m *Model) renderStatusBar() string {
 	var left string
 	if m.viewMode == ViewAgents {
 		left = fmt.Sprintf("[agents] %d tool calls", len(m.agentEvents))
+		if m.agentRigFilter != "" {
+			left += fmt.Sprintf(" | rig: %s", m.agentRigFilter)
+		}
 		if m.agentSessionFilter != "" {
 			left += fmt.Sprintf(" | session: %s", m.agentSessionFilter)
 		}
@@ -543,6 +546,7 @@ func (m *Model) renderShortHelp() string {
 	if m.viewMode == ViewAgents {
 		hints := []string{
 			HelpKeyStyle.Render("a") + HelpDescStyle.Render(":activity"),
+			HelpKeyStyle.Render("r") + HelpDescStyle.Render(":rig"),
 			HelpKeyStyle.Render("j/k") + HelpDescStyle.Render(":scroll"),
 			HelpKeyStyle.Render("R") + HelpDescStyle.Render(":refresh"),
 			HelpKeyStyle.Render("?") + HelpDescStyle.Render(":help"),
@@ -597,25 +601,39 @@ func (m *Model) renderAgentsFeed() string {
 
 	var lines []string
 
-	// Show events in reverse chronological order (newest first)
-	start := 0
-	if len(m.agentEvents) > 200 {
-		start = len(m.agentEvents) - 200
+	// Show events in reverse chronological order (newest first), filtered by rig
+	count := 0
+	for i := len(m.agentEvents) - 1; i >= 0 && count < 200; i-- {
+		e := m.agentEvents[i]
+		if m.agentRigFilter != "" && e.Rig != m.agentRigFilter {
+			continue
+		}
+		lines = append(lines, m.renderAgentEvent(e))
+		count++
 	}
 
-	for i := len(m.agentEvents) - 1; i >= start; i-- {
-		e := m.agentEvents[i]
-		lines = append(lines, m.renderAgentEvent(e))
+	if len(lines) == 0 {
+		return AgentIdleStyle.Render(fmt.Sprintf("No events for rig '%s'. Press r to cycle filter.", m.agentRigFilter))
 	}
 
 	return strings.Join(lines, "\n")
 }
 
 // renderAgentEvent renders a single agent tool-call event line.
-// Format: "03:42:01  mayor    Read CHRONICLE.md (lines 1-50)"
+// Format: "03:42:01  gastown  😺 mayor    Read CHRONICLE.md (lines 1-50)"
 func (m *Model) renderAgentEvent(e Event) string {
 	// Timestamp
 	ts := TimestampStyle.Render(e.Time.Local().Format("15:04:05"))
+
+	// Rig (right-padded)
+	rig := e.Rig
+	if rig == "" {
+		rig = "—"
+	}
+	if len(rig) > 12 {
+		rig = rig[:12]
+	}
+	rigStr := RigStyle.Render(fmt.Sprintf("%-12s", rig))
 
 	// Actor (short form, right-padded)
 	actor := "unknown"
@@ -637,7 +655,7 @@ func (m *Model) renderAgentEvent(e Event) string {
 	// Message (already summarized by the source)
 	msg := e.Message
 
-	return fmt.Sprintf("%s  %s %s %s", ts, icon, RoleStyle.Render(actorStr), msg)
+	return fmt.Sprintf("%s  %s %s %s %s", ts, rigStr, icon, RoleStyle.Render(actorStr), msg)
 }
 
 // formatAge formats a duration as a short age string

@@ -2,6 +2,7 @@ package feed
 
 import (
 	"os/exec"
+	"sort"
 	"sync"
 	"time"
 
@@ -114,6 +115,8 @@ type Model struct {
 	agentsViewport     viewport.Model
 	agentsEventChan    <-chan Event       // channel for agent events from VictoriaLogs
 	agentSessionFilter string            // filter events by session ID
+	agentRigFilter     string            // filter events by rig name (empty = all)
+	agentRigs          []string          // known rig names for cycling
 	lastSeenAgentTime  time.Time         // for deduplication
 	agentsHealthy      bool              // whether VictoriaLogs is reachable
 
@@ -441,6 +444,11 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case key.Matches(msg, m.keys.ToggleProblems):
 		return m.toggleProblemsView()
+
+	case key.Matches(msg, m.keys.CycleRig):
+		if m.viewMode == ViewAgents {
+			return m.cycleRigFilter()
+		}
 
 	case key.Matches(msg, m.keys.ToggleAgents):
 		return m.toggleAgentsView()
@@ -944,12 +952,57 @@ func (m *Model) addAgentEvent(e Event) {
 	}
 	m.lastSeenAgentTime = e.Time
 
+	// Track known rigs for the cycle filter
+	if e.Rig != "" {
+		found := false
+		for _, r := range m.agentRigs {
+			if r == e.Rig {
+				found = true
+				break
+			}
+		}
+		if !found {
+			m.agentRigs = append(m.agentRigs, e.Rig)
+			sort.Strings(m.agentRigs)
+		}
+	}
+
 	m.agentEvents = append(m.agentEvents, e)
 	if len(m.agentEvents) > maxEventHistory {
 		m.agentEvents = m.agentEvents[len(m.agentEvents)-maxEventHistory:]
 	}
 
 	m.updateViewContentLocked()
+}
+
+// cycleRigFilter cycles through known rigs: all → rig1 → rig2 → ... → all
+func (m *Model) cycleRigFilter() (tea.Model, tea.Cmd) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if len(m.agentRigs) == 0 {
+		return m, nil
+	}
+
+	if m.agentRigFilter == "" {
+		// Currently showing all → switch to first rig
+		m.agentRigFilter = m.agentRigs[0]
+	} else {
+		// Find current rig and advance
+		for i, r := range m.agentRigs {
+			if r == m.agentRigFilter {
+				if i+1 < len(m.agentRigs) {
+					m.agentRigFilter = m.agentRigs[i+1]
+				} else {
+					m.agentRigFilter = "" // wrap to "all"
+				}
+				break
+			}
+		}
+	}
+
+	m.updateViewContentLocked()
+	return m, nil
 }
 
 // SetEventChannel sets the channel to receive events from.
