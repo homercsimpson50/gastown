@@ -46,6 +46,13 @@ type ollamaResponse struct {
 	EvalCount     int    `json:"eval_count"`
 }
 
+// summaryEntry is one entry in the rolling summary stream.
+type summaryEntry struct {
+	Text     string
+	Time     time.Time
+	Duration time.Duration
+}
+
 // SummaryProvider generates AI summaries of agent events using a local LLM.
 type SummaryProvider struct {
 	url       string
@@ -53,11 +60,9 @@ type SummaryProvider struct {
 	client    *http.Client
 	available bool
 
-	mu            sync.RWMutex
-	lastSummary   string
-	lastUpdated   time.Time
-	lastDuration  time.Duration
-	summarizing   bool
+	mu          sync.RWMutex
+	summaries   []summaryEntry // rolling stream (newest last)
+	summarizing bool
 }
 
 // NewSummaryProvider creates a new summary provider.
@@ -114,14 +119,13 @@ func (sp *SummaryProvider) Available() bool {
 	return sp.available
 }
 
-// Summary returns the latest summary text and when it was generated.
-func (sp *SummaryProvider) Summary() (text string, age time.Duration, inferDuration time.Duration) {
+// Summaries returns all summary entries (oldest first).
+func (sp *SummaryProvider) Summaries() []summaryEntry {
 	sp.mu.RLock()
 	defer sp.mu.RUnlock()
-	if sp.lastSummary == "" {
-		return "", 0, 0
-	}
-	return sp.lastSummary, time.Since(sp.lastUpdated), sp.lastDuration
+	result := make([]summaryEntry, len(sp.summaries))
+	copy(result, sp.summaries)
+	return result
 }
 
 // IsSummarizing returns whether a summary is currently being generated.
@@ -151,17 +155,19 @@ func (sp *SummaryProvider) Summarize(events []Event) {
 
 		summary, duration, err := sp.generate(events)
 		if err != nil {
-			sp.mu.Lock()
-			sp.lastSummary = fmt.Sprintf("(summary error: %v)", err)
-			sp.lastUpdated = time.Now()
-			sp.mu.Unlock()
 			return
 		}
 
 		sp.mu.Lock()
-		sp.lastSummary = summary
-		sp.lastUpdated = time.Now()
-		sp.lastDuration = duration
+		sp.summaries = append(sp.summaries, summaryEntry{
+			Text:     summary,
+			Time:     time.Now(),
+			Duration: duration,
+		})
+		// Keep max 20 summaries
+		if len(sp.summaries) > 20 {
+			sp.summaries = sp.summaries[len(sp.summaries)-20:]
+		}
 		sp.mu.Unlock()
 	}()
 }

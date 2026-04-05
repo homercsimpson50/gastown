@@ -1073,8 +1073,8 @@ func (m *Model) triggerSummaryLocked() {
 }
 
 // isIdleEvent returns true for maintenance/infrastructure events that
-// shouldn't trigger AI re-summarization. Only mayor and polecat events
-// are considered "real work" worth summarizing.
+// shouldn't appear in the agents feed. Only user<->mayor conversation
+// and polecat coding work belong here.
 func isIdleEvent(e Event) bool {
 	switch e.Role {
 	case "refinery", "witness", "deacon":
@@ -1083,6 +1083,24 @@ func isIdleEvent(e Event) bool {
 	// Boot/dog agents are infrastructure
 	if strings.Contains(e.Actor, "boot") || strings.Contains(e.Actor, "dog") {
 		return true
+	}
+	// Mayor housekeeping (startup routine, operational commands)
+	// These are visible in regular gt feed / dashboard
+	if e.Role == "mayor" {
+		msg := strings.ToLower(e.Message)
+		if strings.HasPrefix(msg, "run: gt hook") ||
+			strings.HasPrefix(msg, "run: gt mail") ||
+			strings.HasPrefix(msg, "run: gt escalate") ||
+			strings.HasPrefix(msg, "run: gt prime") ||
+			strings.HasPrefix(msg, "run: gt patrol") ||
+			strings.HasPrefix(msg, "run: gt status") ||
+			strings.HasPrefix(msg, "run: gt feed") ||
+			strings.Contains(msg, "cold-start") ||
+			strings.Contains(msg, "no hook") ||
+			strings.Contains(msg, "checking in") ||
+			strings.Contains(msg, "escalation") {
+			return true
+		}
 	}
 	return false
 }

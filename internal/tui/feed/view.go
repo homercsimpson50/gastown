@@ -730,7 +730,7 @@ func (m *Model) renderAgentsSplitView() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, left, mid, right)
 }
 
-// renderSummaryContent renders the AI summary panel content.
+// renderSummaryContent renders the AI summary panel as a rolling stream.
 func (m *Model) renderSummaryContent(width int) string {
 	var lines []string
 
@@ -746,25 +746,28 @@ func (m *Model) renderSummaryContent(width int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	if m.summaryProvider.IsSummarizing() {
-		lines = append(lines, AgentIdleStyle.Render("Summarizing..."))
+	summaries := m.summaryProvider.Summaries()
+
+	if len(summaries) == 0 {
+		if m.summaryProvider.IsSummarizing() {
+			lines = append(lines, AgentIdleStyle.Render("Summarizing..."))
+		} else {
+			lines = append(lines, AgentIdleStyle.Render("Waiting for events..."))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	// Render newest first
+	for i := len(summaries) - 1; i >= 0; i-- {
+		s := summaries[i]
+		ts := TimestampStyle.Render(s.Time.Local().Format("15:04"))
+		wrapped := wordWrap(s.Text, width-8)
+		lines = append(lines, fmt.Sprintf("%s  %s", ts, wrapped))
 		lines = append(lines, "")
 	}
 
-	text, age, dur := m.summaryProvider.Summary()
-	if text == "" {
-		lines = append(lines, AgentIdleStyle.Render("Waiting for events..."))
-	} else {
-		// Word-wrap the summary to fit the panel width
-		wrapped := wordWrap(text, width)
-		lines = append(lines, wrapped)
-		lines = append(lines, "")
-
-		// Stats line
-		ageStr := formatAge(age)
-		durStr := fmt.Sprintf("%.1fs", dur.Seconds())
-		stats := TimestampStyle.Render(fmt.Sprintf("Updated %s ago (%s)", ageStr, durStr))
-		lines = append(lines, stats)
+	if m.summaryProvider.IsSummarizing() {
+		lines = append(lines, AgentIdleStyle.Render("Summarizing..."))
 	}
 
 	return strings.Join(lines, "\n")
