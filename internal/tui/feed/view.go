@@ -687,13 +687,22 @@ func (m *Model) renderAgentsSplitView() string {
 		panelHeight = 10
 	}
 
-	// Left panel: events
+	// Left panel: events (uses agentsViewport for scrolling)
 	eventsContent := m.renderAgentsFeed()
+	m.agentsViewport.Width = eventsWidth
+	m.agentsViewport.Height = panelHeight
+	m.agentsViewport.SetContent(eventsContent)
+
+	eventsBorder := lipgloss.Color("240")
+	if m.focusedPanel == PanelAgents {
+		eventsBorder = lipgloss.Color("63")
+	}
 	eventsStyle := lipgloss.NewStyle().
 		Width(eventsWidth).
 		MaxWidth(eventsWidth).
 		Height(panelHeight).
-		MaxHeight(panelHeight)
+		MaxHeight(panelHeight).
+		BorderForeground(eventsBorder)
 
 	// Grey divider line
 	dividerStyle := lipgloss.NewStyle().
@@ -723,7 +732,7 @@ func (m *Model) renderAgentsSplitView() string {
 		PaddingLeft(1).
 		BorderForeground(summaryBorder)
 
-	left := eventsStyle.Render(eventsContent)
+	left := eventsStyle.Render(m.agentsViewport.View())
 	mid := dividerStyle.Render(divider)
 	right := summaryStyle.Render(m.summaryViewport.View())
 
