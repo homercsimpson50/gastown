@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -165,9 +166,17 @@ func NewModel(bd *beads.Beads) *Model {
 		done:             make(chan struct{}),
 		viewMode:         ViewActivity,
 		stuckDetector:    NewStuckDetector(bd),
-		summaryProvider:  NewSummaryProvider(),
+		summaryProvider:  newSummaryProviderIfEnabled(),
 		summaryViewport:  viewport.New(0, 0),
 	}
+}
+
+// newSummaryProviderIfEnabled returns a SummaryProvider only if GT_FEED_AI=1.
+func newSummaryProviderIfEnabled() *SummaryProvider {
+	if os.Getenv("GT_FEED_AI") == "1" {
+		return NewSummaryProvider()
+	}
+	return nil
 }
 
 // NewModelWithProblemsView creates a new feed TUI model starting in problems view.
@@ -416,7 +425,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// Refresh summary periodically if panel is visible
 		m.mu.Lock()
-		if m.showSummary && m.summaryProvider.Available() && time.Since(m.lastSummaryRefresh) >= SummaryInterval {
+		if m.showSummary && m.summaryProvider != nil && m.summaryProvider.Available() && time.Since(m.lastSummaryRefresh) >= SummaryInterval {
 			m.triggerSummaryLocked()
 		}
 		// Update view to pick up new summary text
@@ -468,7 +477,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleProblemsView()
 
 	case key.Matches(msg, m.keys.ToggleSummary):
-		if m.viewMode == ViewAgents {
+		if m.viewMode == ViewAgents && m.summaryProvider != nil {
 			return m.toggleSummary()
 		}
 
@@ -1026,7 +1035,7 @@ func (m *Model) addAgentEvent(e Event) {
 func (m *Model) toggleSummary() (tea.Model, tea.Cmd) {
 	m.mu.Lock()
 	m.showSummary = !m.showSummary
-	if m.showSummary && m.summaryProvider.Available() {
+	if m.showSummary && m.summaryProvider != nil && m.summaryProvider.Available() {
 		// Trigger an immediate summary
 		m.triggerSummaryLocked()
 	}
@@ -1039,7 +1048,7 @@ func (m *Model) toggleSummary() (tea.Model, tea.Cmd) {
 // triggerSummaryLocked sends recent events to the LLM for summarization.
 // Caller must hold m.mu.
 func (m *Model) triggerSummaryLocked() {
-	if !m.showSummary || !m.summaryProvider.Available() {
+	if !m.showSummary || m.summaryProvider == nil || !m.summaryProvider.Available() {
 		return
 	}
 	if m.summaryProvider.IsSummarizing() {

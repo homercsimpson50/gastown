@@ -549,18 +549,22 @@ func (m *Model) renderStatusBar() string {
 // renderShortHelp renders abbreviated key hints
 func (m *Model) renderShortHelp() string {
 	if m.viewMode == ViewAgents {
-		summaryHint := HelpKeyStyle.Render("s") + HelpDescStyle.Render(":summary")
-		if m.showSummary {
-			summaryHint = HelpKeyStyle.Render("s") + HelpDescStyle.Render(":hide summary")
-		}
 		hints := []string{
 			HelpKeyStyle.Render("a") + HelpDescStyle.Render(":activity"),
 			HelpKeyStyle.Render("r") + HelpDescStyle.Render(":rig"),
-			summaryHint,
+		}
+		if m.summaryProvider != nil {
+			summaryHint := HelpKeyStyle.Render("s") + HelpDescStyle.Render(":summary")
+			if m.showSummary {
+				summaryHint = HelpKeyStyle.Render("s") + HelpDescStyle.Render(":hide summary")
+			}
+			hints = append(hints, summaryHint)
+		}
+		hints = append(hints,
 			HelpKeyStyle.Render("j/k") + HelpDescStyle.Render(":scroll"),
 			HelpKeyStyle.Render("R") + HelpDescStyle.Render(":refresh"),
 			HelpKeyStyle.Render("q") + HelpDescStyle.Render(":quit"),
-		}
+		)
 		return strings.Join(hints, "  ")
 	}
 	if m.viewMode == ViewProblems {
