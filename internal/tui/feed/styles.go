@@ -108,6 +108,7 @@ var (
 		constants.RoleCrew:     constants.EmojiCrew,
 		constants.RolePolecat:  constants.EmojiPolecat,
 		constants.RoleDeacon:   constants.EmojiDeacon,
+		"human":                "\U0001F3CE\uFE0F",  // racing car
 	}
 
 	// MQ event styles

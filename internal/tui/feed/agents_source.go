@@ -133,6 +133,13 @@ func agentEntryToEvent(entry vlogs.LogEntry) *Event {
 		message = entry.EventType
 	}
 
+	// Distinguish user input from agent output
+	eventRole := role
+	if entry.Role == "user" && entry.EventType == "text" {
+		eventRole = "human"
+		actor = "mad-max"
+	}
+
 	return &Event{
 		Time:    t,
 		Type:    "agent_" + entry.EventType,
@@ -140,7 +147,7 @@ func agentEntryToEvent(entry vlogs.LogEntry) *Event {
 		Target:  entry.NativeSessionID,
 		Message: message,
 		Rig:     rig,
-		Role:    role,
+		Role:    eventRole,
 		Raw:     entry.Content,
 	}
 }
